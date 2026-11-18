@@ -1,0 +1,28 @@
+# Fault: CrashLoopBackOff from a bad command. The container exits 3 on every start, with an error
+# message in its logs. Fix would be a corrected command/args.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fault-bad-command
+  namespace: default
+  labels:
+    app: fault-bad-command
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fault-bad-command
+  template:
+    metadata:
+      labels:
+        app: fault-bad-command
+    spec:
+      containers:
+      - name: app
+        image: busybox:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - 'echo "FATAL: cannot find /etc/app.conf"; exit 3'
+        resources:
+          limits:
+            memory: "64Mi"

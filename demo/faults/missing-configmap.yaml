@@ -1,0 +1,32 @@
+# Fault: the Deployment reads a ConfigMap that does not exist, so the container cannot be created
+# (CreateContainerConfigError). The fix is to create the ConfigMap (or correct its name).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fault-missing-cm
+  namespace: default
+  labels:
+    app: fault-missing-cm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fault-missing-cm
+  template:
+    metadata:
+      labels:
+        app: fault-missing-cm
+    spec:
+      containers:
+      - name: app
+        image: busybox:latest
+        command: ["/bin/sh", "-c", "echo mode=$APP_MODE; sleep 3600"]
+        env:
+        - name: APP_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: fault-config
+              key: mode
+        resources:
+          limits:
+            memory: "64Mi"

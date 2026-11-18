@@ -1,0 +1,28 @@
+# Fault: the pod requests far more memory than any node has, so it stays Pending (Unschedulable).
+# The fix is a realistic request (a patch to the Deployment).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fault-unschedulable
+  namespace: default
+  labels:
+    app: fault-unschedulable
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fault-unschedulable
+  template:
+    metadata:
+      labels:
+        app: fault-unschedulable
+    spec:
+      containers:
+      - name: app
+        image: busybox:latest
+        command: ["/bin/sh", "-c", "sleep 3600"]
+        resources:
+          requests:
+            memory: "500Gi"
+          limits:
+            memory: "500Gi"

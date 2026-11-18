@@ -1,0 +1,68 @@
+{
+  "_comment": "Fault table for eval/fault_runner.py. expected_* are what a CORRECT agent should do with a real model. The mock model has a script only for sentinel-demo-app (mock_scripted=true), so for every other fault the mock result is 'not exercised', not an agent result. expected_sandbox is a description, not auto-scored.",
+  "faults": [
+    {
+      "id": "crash-missing-env",
+      "manifest": "demo/broken-pod.yaml",
+      "deployment": "sentinel-demo-app",
+      "mock_scripted": true,
+      "expected_detected": true,
+      "expected_sandbox": "reproduces CrashLoopBackOff from the unmodified manifest; fix (REQUIRED_CONFIG env) reaches Running/Ready",
+      "expected_outcome": "approve"
+    },
+    {
+      "id": "oom-low-limit",
+      "manifest": "demo/broken-pod-oom.yaml",
+      "deployment": "sentinel-oom-app",
+      "mock_scripted": false,
+      "expected_detected": true,
+      "expected_sandbox": "reproduces OOMKilled at 32Mi; a raised memory limit runs cleanly",
+      "expected_outcome": "approve"
+    },
+    {
+      "id": "image-bad-tag",
+      "manifest": "demo/broken-pod-image.yaml",
+      "deployment": "sentinel-image-app",
+      "mock_scripted": false,
+      "expected_detected": true,
+      "expected_sandbox": "reproduces ImagePullBackOff for a nonexistent tag; a valid tag runs",
+      "expected_outcome": "approve"
+    },
+    {
+      "id": "bad-command",
+      "manifest": "demo/faults/bad-command.yaml",
+      "deployment": "fault-bad-command",
+      "mock_scripted": false,
+      "expected_detected": true,
+      "expected_sandbox": "reproduces exit code 3 with the FATAL log line; a corrected command stays Running",
+      "expected_outcome": "approve"
+    },
+    {
+      "id": "readiness-probe-fails",
+      "manifest": "demo/faults/readiness-fail.yaml",
+      "deployment": "fault-readiness",
+      "mock_scripted": false,
+      "expected_detected": false,
+      "expected_sandbox": "not run: a Running pod that is not Ready is not a failure state the detector recognises",
+      "expected_outcome": "none"
+    },
+    {
+      "id": "missing-configmap",
+      "manifest": "demo/faults/missing-configmap.yaml",
+      "deployment": "fault-missing-cm",
+      "mock_scripted": false,
+      "expected_detected": true,
+      "expected_sandbox": "reproduces CreateContainerConfigError; creating the ConfigMap in the sandbox runs",
+      "expected_outcome": "approve"
+    },
+    {
+      "id": "unschedulable-memory",
+      "manifest": "demo/faults/unschedulable.yaml",
+      "deployment": "fault-unschedulable",
+      "mock_scripted": false,
+      "expected_detected": true,
+      "expected_sandbox": "reproduces Pending/Unschedulable; a request that fits a node schedules and runs",
+      "expected_outcome": "approve"
+    }
+  ]
+}

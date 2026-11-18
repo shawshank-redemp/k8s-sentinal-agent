@@ -1,0 +1,50 @@
+{
+  "banner": "MOCK MODEL: plumbing check, not accuracy.",
+  "stamp": "20261118T140406Z",
+  "faults": [
+    {
+      "id": "crash-missing-env",
+      "deployment": "sentinel-demo-app",
+      "mock_scripted": true,
+      "expected": {
+        "detected": true,
+        "outcome": "approve",
+        "sandbox": "reproduces CrashLoopBackOff from the unmodified manifest; fix (REQUIRED_CONFIG env) reaches Running/Ready"
+      },
+      "detected": true,
+      "pod": "sentinel-demo-app-6d4cc96df8-gwnlg",
+      "session_id": "01m7qfbdqrzaf0z44graz2cez3",
+      "run_outcome": "finished",
+      "approval_requested": true,
+      "tool_proposed": "kubectl_patch",
+      "approved": true,
+      "pod_ready_after": false,
+      "notes": [],
+      "detection_match": true,
+      "status": "MATCH"
+    },
+    {
+      "id": "readiness-probe-fails",
+      "deployment": "fault-readiness",
+      "mock_scripted": false,
+      "expected": {
+        "detected": false,
+        "outcome": "none",
+        "sandbox": "not run: a Running pod that is not Ready is not a failure state the detector recognises"
+      },
+      "detected": false,
+      "pod": null,
+      "session_id": null,
+      "run_outcome": "none",
+      "approval_requested": false,
+      "tool_proposed": null,
+      "approved": false,
+      "pod_ready_after": null,
+      "notes": [
+        "no DETECTED line for fault-readiness within 90s"
+      ],
+      "detection_match": true,
+      "status": "MATCH"
+    }
+  ]
+}
