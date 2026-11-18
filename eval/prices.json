@@ -1,0 +1,11 @@
+{
+  "_comment": "FILL IN YOURSELF. Prices in USD per 1,000,000 tokens, from your provider's price sheet, for the exact model id. Left null on purpose: metrics_report.py computes no cost while a value is null and never guesses one. Model identity is not stored by TrueForge; pass the id with --model.",
+  "models": {
+    "openai/gpt-4-1": {
+      "input_per_mtok_usd": null,
+      "output_per_mtok_usd": null,
+      "price_source_url": "",
+      "price_checked_on": ""
+    }
+  }
+}

@@ -130,5 +130,6 @@ echo
 cd "$SENTINEL_ROOT"
 # Pin the watcher to the Kind context so it can never watch whatever cluster kubectl happens to point at.
 # "compile" first: exec:java alone runs whatever is already in target/, which may be stale.
-SENTINEL_KUBE_CONTEXT="$KUBE_CONTEXT" SENTINEL_TRANSIENT_WAIT_SECONDS="${SENTINEL_TRANSIENT_WAIT_SECONDS:-6}" \
+RUN_MODE=real; [ "$REHEARSE" = 1 ] && RUN_MODE=rehearsal
+SENTINEL_RUN_MODE="$RUN_MODE" SENTINEL_KUBE_CONTEXT="$KUBE_CONTEXT" SENTINEL_TRANSIENT_WAIT_SECONDS="${SENTINEL_TRANSIENT_WAIT_SECONDS:-6}" \
   mvn -q compile exec:java -Dexec.mainClass="com.sentinel.detection.DetectionModule"
