@@ -71,6 +71,10 @@ public final class DetectionModule {
         Double.parseDouble(System.getenv().getOrDefault("SENTINEL_TRANSIENT_WAIT_SECONDS", "30"));
     public static double WAITING_STALE_TIMEOUT_SECONDS = 60; // forget "waiting" pods after 1 min
     public static double PENDING_MIN_AGE_SECONDS = 30; // ignore brand-new Pending pods
+    // A Pending pod with no failing-container reason (ContainerCreating, Unschedulable, ...) is due
+    // only after this much age. SENTINEL_STUCK_PENDING_SECONDS overrides the default of 3 minutes.
+    public static double STUCK_PENDING_SECONDS =
+        Double.parseDouble(System.getenv().getOrDefault("SENTINEL_STUCK_PENDING_SECONDS", "180"));
     public static int MIN_RESTART_COUNT_CRASHLOOP = 1; // diagnose CrashLoopBackOff after 1+ restarts
     public static int CLEANUP_EVERY_N_EVENTS = 50; // sweep stale entries every N events
     public static int RECONNECT_DELAY_SECONDS = 5;
@@ -84,6 +88,9 @@ public final class DetectionModule {
 
     /** pod_id -> timestamp (seconds) first observed in a failing state */
     public static final Map<String, Double> waitingPods = new ConcurrentHashMap<>();
+
+    /** Stuck-Pending pods the sweeper must re-check, because they may never emit another event. */
+    public static final Map<String, Pod> stuckPendingWatch = new ConcurrentHashMap<>();
 
     private static double nowSeconds() {
         return System.currentTimeMillis() / 1000.0;
@@ -288,12 +295,42 @@ public final class DetectionModule {
         // waiting set instead of diagnosing.
         if (!isFailureState) {
             waitingPods.remove(podId);
+            stuckPendingWatch.remove(podId);
             return false;
         }
 
+        // Stuck Pending: a pod still Pending with no failing-container reason (ContainerCreating,
+        // Unschedulable, ...) is not a failure the detector had a rule for, and it can sit still for
+        // minutes without emitting any event. It is due only after STUCK_PENDING_SECONDS of age, then
+        // it must stay stuck for the transient wait. It stays on the sweeper's watch until then,
+        // because no event may ever arrive for it. Detection only starts the agent; approval still
+        // gates every production change.
+        if ("Pending".equals(status) && !FAILURE_REASONS.contains(reason)) {
+            if (podAgeSeconds(pod) < STUCK_PENDING_SECONDS) {
+                stuckPendingWatch.put(podId, pod);
+                return false;
+            }
+            Double stuckSince = waitingPods.get(podId);
+            if (stuckSince == null) {
+                waitingPods.put(podId, now);
+                stuckPendingWatch.put(podId, pod);
+                return false;
+            }
+            if ((now - stuckSince) < TRANSIENT_WAIT_SECONDS) {
+                stuckPendingWatch.put(podId, pod);
+                return false;
+            }
+            waitingPods.remove(podId);
+            stuckPendingWatch.remove(podId);
+            processedPods.put(podId, now);
+            return true;
+        }
+
         // Loophole fix: new pod initialization - a brand-new Pending pod is probably still
-        // being scheduled, not actually stuck.
+        // being scheduled, not actually stuck. The clock must still start here: a pod that goes
+        // quiet after this point emits no event, so the sweeper has to find it through waitingPods.
         if ("Pending".equals(status) && podAgeSeconds(pod) < PENDING_MIN_AGE_SECONDS) {
+            waitingPods.putIfAbsent(podId, now);
             return false;
         }
 
@@ -451,6 +488,7 @@ public final class DetectionModule {
         synchronized (EVALUATE_LOCK) {
             waitingPods.remove(podId);
             lastSeenWaitingPods.remove(podId);
+            stuckPendingWatch.remove(podId);
         }
     }
 
@@ -487,6 +525,11 @@ public final class DetectionModule {
      * state; any real change still arrives as an event and refreshes that state first.
      */
     public static void sweepWaitingPods() {
+        // Stuck-Pending pods: a silent pod must still age into its threshold without any event.
+        for (String podId : List.copyOf(stuckPendingWatch.keySet())) {
+            Pod pod = stuckPendingWatch.get(podId);
+            if (pod != null) evaluate(pod);
+        }
         for (String podId : List.copyOf(lastSeenWaitingPods.keySet())) {
             Pod pod = lastSeenWaitingPods.get(podId);
             if (pod == null) continue;

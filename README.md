@@ -171,6 +171,7 @@ Individual pieces, if you want them: `scripts/setup-sandbox.sh`, `scripts/teardo
 | `SENTINEL_KUBE_CONTEXT` | current context | Pins the watcher to one kube context (`demo.sh` sets the Kind one) |
 | `SENTINEL_POLL_MS` / `SENTINEL_MAX_RUN_MINUTES` | `2000` / `60` | Run-follow polling and give-up time |
 | `SENTINEL_DENY_COOLDOWN_MINUTES` | `30` | How long a denied fix silences that workload |
+| `SENTINEL_STUCK_PENDING_SECONDS` | `180` | Age after which a `Pending` pod with no failing-container reason (e.g. `ContainerCreating`, `Unschedulable`) is considered stuck; it must then stay stuck for the transient wait before a run starts. Detection only starts the agent; approval still gates every production change. |
 
 ### Honest caveats
 
@@ -236,6 +237,28 @@ Individual pieces, if you want them: `scripts/setup-sandbox.sh`, `scripts/teardo
   stored TrueForge data for 12 real-model sessions (257 calls). Cost is not computed, because
   `eval/prices.json` has no prices. The trimming estimate in `eval/token_analysis.py` is a local
   approximation (bytes / 4), not a measurement.
+- **The stuck-Pending rule is a time threshold.** A `Pending` pod with no failing-container reason is
+  detected after `SENTINEL_STUCK_PENDING_SECONDS` (default 180 s) plus the transient wait. The default is a
+  judgement, not measured against real cluster behaviour. The mock runs confirm the rule fires; they do not
+  show that 180 s is the right value.
+
+### Fault-injection results (MOCK model: plumbing check, not accuracy)
+
+Source: `eval/results/` (latest per fault: `20261118T152122Z`, `20261118T144125Z`, `20261118T140816Z`,
+and `20261118T143801Z-rejudged`). Mock runbook: only `sentinel-demo-app` has one.
+
+| fault | expected detect | detected | expected outcome | approval asked | mock result |
+|---|---|---|---|---|---|
+| crash-missing-env | yes | yes | approve | yes (runner approved) | MATCH; pod Ready after approval (kubectl) |
+| readiness-probe-fails | no | no | none | no | MATCH (correctly not detected) |
+| oom-low-limit | yes | yes | approve | no (no mock script) | NOT EXERCISED |
+| image-bad-tag | yes | yes | approve | no (no mock script) | NOT EXERCISED |
+| bad-command | yes | yes | approve | no (no mock script) | NOT EXERCISED |
+| missing-configmap | yes | yes (after the stuck-Pending fix) | approve | no (no mock script) | NOT EXERCISED |
+| unschedulable-memory | yes | yes (after the stuck-Pending fix) | approve | no (no mock script) | NOT EXERCISED |
+
+Before the stuck-Pending fix, `missing-configmap` and `unschedulable-memory` were not detected (MISMATCH).
+Time to detect is not recorded by the runner, and the results contain no real-model rows.
 
 ## Stack
 
