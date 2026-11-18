@@ -302,6 +302,8 @@ class Handler(BaseHTTPRequestHandler):
         else:
             sse(self, chunk({"role": "assistant", "content": FINAL_TEXT[self.scenario]}))
             sse(self, chunk({}, "stop"))
+        # FAKE usage, required only so TrueForge accepts the stream. It is NOT a measurement: every
+        # mock call reports exactly 10/10, and eval/metrics_report.py excludes these sessions.
         sse(self, {"id": "mock-1", "object": "chat.completion.chunk", "model": "mock", "choices": [],
                    "usage": {"prompt_tokens": 10, "completion_tokens": 10, "total_tokens": 20}})
         self.wfile.write(b"data: [DONE]\n\n")

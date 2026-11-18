@@ -171,6 +171,9 @@ public class TrueForgeAgentTrigger {
             meta.put("pod", truncate(podId, 128));
             meta.put("workload", truncate(workload, 128));
             meta.put("severity", podInfo.severity());
+            // "rehearsal" = scripted mock model (demo/mock-llm); "real" = a real model. Lets metrics
+            // tooling exclude mock sessions without guessing from token counts. Set by demo.sh.
+            meta.put("run_mode", System.getenv().getOrDefault("SENTINEL_RUN_MODE", "unknown"));
 
             String sessionId = call("POST", "/sessions", session).path("data").path("id").asText();
             if (sessionId.isEmpty()) throw new TrueForgeException("TrueForge returned no session id");
