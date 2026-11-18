@@ -1,0 +1,115 @@
+{
+  "banner": "MOCK MODEL: plumbing check, not accuracy.",
+  "stamp": "20261118T143801Z-rejudged",
+  "faults": [
+    {
+      "id": "oom-low-limit",
+      "deployment": "sentinel-oom-app",
+      "mock_scripted": false,
+      "expected": {
+        "detected": true,
+        "outcome": "approve",
+        "sandbox": "reproduces OOMKilled at 32Mi; a raised memory limit runs cleanly"
+      },
+      "detected": true,
+      "pod": "sentinel-oom-app-66fc4b6bcb-67bnb",
+      "session_id": "01m7qh3yddvjc5bxbh3yww9zkz",
+      "run_outcome": "finished",
+      "approval_requested": false,
+      "tool_proposed": null,
+      "approved": false,
+      "pod_ready_after": null,
+      "notes": [],
+      "detection_match": true,
+      "status": "NOT EXERCISED (mock has no script for this fault)"
+    },
+    {
+      "id": "image-bad-tag",
+      "deployment": "sentinel-image-app",
+      "mock_scripted": false,
+      "expected": {
+        "detected": true,
+        "outcome": "approve",
+        "sandbox": "reproduces ImagePullBackOff for a nonexistent tag; a valid tag runs"
+      },
+      "detected": true,
+      "pod": "sentinel-image-app-5dd8955cc5-rll2p",
+      "session_id": "01m7qh5f7asd76n08j14sgbakr",
+      "run_outcome": "finished",
+      "approval_requested": false,
+      "tool_proposed": null,
+      "approved": false,
+      "pod_ready_after": null,
+      "notes": [],
+      "detection_match": true,
+      "status": "NOT EXERCISED (mock has no script for this fault)"
+    },
+    {
+      "id": "bad-command",
+      "deployment": "fault-bad-command",
+      "mock_scripted": false,
+      "expected": {
+        "detected": true,
+        "outcome": "approve",
+        "sandbox": "reproduces exit code 3 with the FATAL log line; a corrected command stays Running"
+      },
+      "detected": true,
+      "pod": "fault-bad-command-84f49464d4-qhl2c",
+      "session_id": "01m7qh67ma75tt7a90ah49sw3e",
+      "run_outcome": "finished",
+      "approval_requested": false,
+      "tool_proposed": null,
+      "approved": false,
+      "pod_ready_after": null,
+      "notes": [],
+      "detection_match": true,
+      "status": "NOT EXERCISED (mock has no script for this fault)"
+    },
+    {
+      "id": "missing-configmap",
+      "deployment": "fault-missing-cm",
+      "mock_scripted": false,
+      "expected": {
+        "detected": true,
+        "outcome": "approve",
+        "sandbox": "reproduces CreateContainerConfigError; creating the ConfigMap in the sandbox runs"
+      },
+      "detected": false,
+      "pod": null,
+      "session_id": null,
+      "run_outcome": "none",
+      "approval_requested": false,
+      "tool_proposed": null,
+      "approved": false,
+      "pod_ready_after": null,
+      "notes": [
+        "no DETECTED line for fault-missing-cm within 150s"
+      ],
+      "detection_match": false,
+      "status": "MISMATCH (detection)"
+    },
+    {
+      "id": "unschedulable-memory",
+      "deployment": "fault-unschedulable",
+      "mock_scripted": false,
+      "expected": {
+        "detected": true,
+        "outcome": "approve",
+        "sandbox": "reproduces Pending/Unschedulable; a request that fits a node schedules and runs"
+      },
+      "detected": false,
+      "pod": null,
+      "session_id": null,
+      "run_outcome": "none",
+      "approval_requested": false,
+      "tool_proposed": null,
+      "approved": false,
+      "pod_ready_after": null,
+      "notes": [
+        "no DETECTED line for fault-unschedulable within 150s"
+      ],
+      "detection_match": false,
+      "status": "MISMATCH (detection)"
+    }
+  ]
+}

@@ -211,6 +211,21 @@ class TrueForgeAgentTriggerTest {
         }
     }
 
+    /** A first request (call_4) already answered, and a second request (call_9) still pending: the
+     * shape a run has after a second production change is proposed, e.g. after a sandbox retry. */
+    static final String EVENTS_SECOND_PENDING;
+    static {
+        try {
+            JsonNode n = MAPPER.readTree(EVENTS_ANSWERED);
+            ((com.fasterxml.jackson.databind.node.ArrayNode) n.get("data")).addObject()
+                .put("type", "tool.approval_required").put("id", "ap-2").put("thread_id", "main")
+                .putArray("tool_calls").addObject().put("id", "call_9").put("source_event_id", "ev-src-2");
+            EVENTS_SECOND_PENDING = MAPPER.writeValueAsString(n);
+        } catch (Exception e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
     // ------------------------------------------------------------------ fixtures
 
     FakeTrueForge tf;
@@ -323,6 +338,19 @@ class TrueForgeAgentTriggerTest {
         assertEquals(Outcome.COMPLETED, await(run));
         assertEquals(1, tf.turnBodies.size(), "a deferred decision must not be posted by Sentinel");
         assertEquals(0, tf.eventPostBodies.size(), "a deferred decision must not be posted by Sentinel");
+    }
+
+    @Test
+    void aSecondProposalAfterAnAnsweredOneIsAskedAndTheAnsweredOneIsNot() throws Exception {
+        tf.eventsOverride = EVENTS_SECOND_PENDING;
+        tf.whenGetTurn("turn-1", PAUSED_NO_ACTIONS, DONE);
+        List<String> asked = new CopyOnWriteArrayList<>();
+
+        Run run = trigger(a -> { asked.add(a.toolCallId()); return ApprovalHandler.Decision.allow(); }).start(pod("crashy"));
+        assertEquals(Outcome.COMPLETED, await(run));
+        assertEquals(List.of("call_9"), asked, "only the unanswered request may reach the human");
+        assertEquals(1, tf.eventPostBodies.size());
+        assertEquals("call_9", tf.eventPostBodies.get(0).path("events").get(0).path("tool_call_id").asText());
     }
 
     @Test
