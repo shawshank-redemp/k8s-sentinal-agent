@@ -191,11 +191,14 @@ Individual pieces, if you want them: `scripts/setup-sandbox.sh`, `scripts/teardo
   crashing replicas -> one run and one prompt (one approval fixed all three); and the watcher
   reconnecting after the API server was restarted mid-run. The *model* in all of those runs was the
   scripted mock LLM - real tool calls and real cluster state, scripted choice of which tool to call
-  next. A run with a real Claude model through the TrueFoundry gateway, and with Daytona, needs your
-  credentials and has **not** been run; the instructions (`trueforge/sentinel-instructions.md`) are
-  written for a real model to follow this same evidence -> reproduce -> verify -> report -> approve
-  -> verify loop and to generate its own patch rather than use a canned one, but that reasoning has
-  only been exercised by the mock script's scripted choices, not by an actual model.
+  next. **Correction:** the TrueForge database on this machine does contain real-model sessions: 12
+  sessions and 257 model calls on `openai/gpt-4-1`, via TrueForge's OpenAI provider (measured by
+  `eval/metrics_report.py`). Their token totals are measured; whether those runs reached a correct
+  outcome has **not** been measured. No real-model run has been made as part of the evaluation in
+  `eval/`, and no Daytona run has been made. Every result in `eval/results/` is from the mock model.
+  The instructions (`trueforge/sentinel-instructions.md`) are written for a real model to follow the
+  evidence -> reproduce -> verify -> report -> approve -> verify loop; how well a real model does that
+  is unmeasured.
 - `--rehearse` (and `--refuse`) script only the crash scenario. The OOM scenario needs a real model.
 - TrueForge's local (`npx`) mode has no login and is for localhost only.
 - **The dashboard buckets tool calls into stages by position, not by reading the model's prose.**
@@ -205,6 +208,34 @@ Individual pieces, if you want them: `scripts/setup-sandbox.sh`, `scripts/teardo
   of free text it still matches on is finding the blast-radius report itself (it has to look for
   that paragraph to display it), so a real model would need to actually write one for that one card
   to appear - the stage tracker, evidence, and approval state don't depend on it.
+
+## What this does and doesn't prove
+
+- **Mock-only evidence.** Every result in `eval/results/` comes from the scripted mock model
+  (`demo/mock-llm/mock_llm.py`), not a real model. Those runs check plumbing: detection, that an
+  approval request reaches the gate and is answered through TrueForge's API, and the cluster state
+  afterwards (read with `kubectl`). They do not measure any model's accuracy. The mock has a script
+  for one workload only (`sentinel-demo-app`); for every other fault the row is NOT EXERCISED, and
+  a detection miss is shown as MISMATCH.
+- **The approval gate is enforced in the agent layer only.** Production writes are gated by
+  TrueForge's `require_approval_for_tools` and relayed by Sentinel. The `k8s-prod` connector runs with
+  the cluster-admin kubeconfig, so anything that can reach the local MCP endpoint with its token can
+  change production without approval. The cluster itself refuses writes outside `sentinel-sandbox`
+  only for the `k8s-sandbox` connector.
+- **Paused-state handling fails closed.** TrueForge 0.185.1 reports an approval pause as state
+  `paused`, with the request as a `tool.approval_required` event. Sentinel acts only on an unanswered
+  request, asks a human once per request, and sends the decision to the paused turn's `events`
+  endpoint. A paused turn with no request is held for two minutes and then handed to a human. Any
+  other or missing state applies nothing and abandons the run for a human to review. These paths are
+  covered by unit tests against a fake TrueForge, and by the mock end to end. They are not covered by
+  a real-model run.
+- **The retry is an instruction, not code.** The one bounded retry after a failed sandbox check is
+  written into `trueforge/sentinel-instructions.md`. Its effect on a real model is **unmeasured**. The
+  mock retry scenario shows the plumbing, not the model's choice.
+- **Token figures are measured; costs are not.** Token totals and the breakdown by component come from
+  stored TrueForge data for 12 real-model sessions (257 calls). Cost is not computed, because
+  `eval/prices.json` has no prices. The trimming estimate in `eval/token_analysis.py` is a local
+  approximation (bytes / 4), not a measurement.
 
 ## Stack
 
