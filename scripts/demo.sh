@@ -11,7 +11,7 @@
 #                                             ever touching production - demonstrates the refusal gate
 #
 # Prerequisites: Docker, kind, kubectl, Java 21 + Maven, Node 22.14+, and TrueForge running:
-#   npx @truefoundry/trueforge@latest            (UI at http://localhost:8790)
+#   npx @truefoundry/trueforge@0.185.1            (UI at http://localhost:8790)
 # For a real run, configure a model in TrueForge (Settings -> Models) or export
 # TRUEFOUNDRY_GATEWAY_URL / TRUEFOUNDRY_API_KEY / SENTINEL_GATEWAY_MODEL_ID, and ideally DAYTONA_API_KEY.
 set -euo pipefail
@@ -74,7 +74,7 @@ echo "Step 2: Set up sentinel-sandbox namespace + start the Kubernetes MCP serve
 echo "Step 3: Check TrueForge and register connectors + agent"
 if ! curl -sf "$TRUEFORGE_URL/api/v1/capabilities" >/dev/null 2>&1; then
   echo "ERROR: TrueForge is not reachable at $TRUEFORGE_URL." >&2
-  echo "       Start it in another terminal:  npx @truefoundry/trueforge@latest" >&2
+  echo "       Start it in another terminal:  npx @truefoundry/trueforge@0.185.1" >&2
   exit 1
 fi
 if [ "$REHEARSE" = 1 ]; then

@@ -50,6 +50,10 @@ class TrueForgeAgentTriggerTest {
         /** When set, the turns list is served page by page; page N's token is "pN" (page 0 has none). */
         volatile List<String> turnsPages = null;
         final AtomicReference<String> lastAuthHeader = new AtomicReference<>();
+        /** When set, every turn-events request returns this body instead of EVENTS_JSON. */
+        volatile String eventsOverride = null;
+        /** Bodies POSTed to a paused turn's /events endpoint (approval decisions). */
+        final List<JsonNode> eventPostBodies = new CopyOnWriteArrayList<>();
 
         FakeTrueForge() throws IOException {
             this("127.0.0.1");
@@ -91,6 +95,9 @@ class TrueForgeAgentTriggerTest {
             if (method.equals("POST") && path.equals("/api/v1/sessions")) {
                 sessionBodies.add(MAPPER.readTree(body));
                 out = "{\"data\":{\"id\":\"sess-1\"}}";
+            } else if (method.equals("POST") && path.matches("/api/v1/sessions/sess-1/turns/[^/]+/events")) {
+                eventPostBodies.add(MAPPER.readTree(body));
+                out = "{\"data\":{}}";
             } else if (method.equals("POST") && path.equals("/api/v1/sessions/sess-1/turns")) {
                 turnBodies.add(MAPPER.readTree(body));
                 out = "{\"data\":{\"id\":\"turn-" + turnCounter.incrementAndGet() + "\",\"state\":{\"status\":\"running\"}}}";
@@ -104,7 +111,7 @@ class TrueForgeAgentTriggerTest {
                     out = pages.get(idx);
                 }
             } else if (method.equals("GET") && path.matches("/api/v1/sessions/sess-1/turns/[^/]+/events")) {
-                out = EVENTS_JSON;
+                out = eventsOverride != null ? eventsOverride : EVENTS_JSON;
             } else if (method.equals("GET") && path.matches("/api/v1/sessions/sess-1/turns/[^/]+")) {
                 String turnId = path.substring(path.lastIndexOf('/') + 1);
                 Deque<String> q = turnGets.get(turnId);
@@ -162,6 +169,43 @@ class TrueForgeAgentTriggerTest {
                 Map.of("type", "model.message", "id", "ev-src", "tool_calls", List.of(
                     Map.of("id", "call_4", "type", "function",
                         "function", Map.of("name", "call_tool", "arguments", args)))))));
+        } catch (Exception e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    /** Newer TrueForge: the turn is "paused" with no required_actions; the approval is an event. */
+    static final String PAUSED_NO_ACTIONS = """
+        {"data":{"id":"turn-1","state":{"status":"paused"}}}""";
+
+    static final String EVENTS_WITH_APPROVAL;
+    static {
+        try {
+            String args = MAPPER.writeValueAsString(Map.of(
+                "mcp_server", "k8s-prod", "tool_name", "kubectl_patch",
+                "input", Map.of("resourceType", "deployment", "name", "sentinel-demo-app",
+                    "namespace", "default", "patchData", Map.of("env", "REQUIRED_CONFIG"))));
+            EVENTS_WITH_APPROVAL = MAPPER.writeValueAsString(Map.of("data", List.of(
+                Map.of("type", "turn.created", "id", "ev-0"),
+                Map.of("type", "model.message", "id", "ev-src", "tool_calls", List.of(
+                    Map.of("id", "call_4", "type", "function",
+                        "function", Map.of("name", "call_tool", "arguments", args)))),
+                Map.of("type", "tool.approval_required", "id", "ap-1", "thread_id", "main",
+                    "tool_calls", List.of(Map.of("id", "call_4", "source_event_id", "ev-src"))))));
+        } catch (Exception e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    /** The same events after the human has answered call_4: the request stays, and an answer follows it. */
+    static final String EVENTS_ANSWERED;
+    static {
+        try {
+            JsonNode n = MAPPER.readTree(EVENTS_WITH_APPROVAL);
+            ((com.fasterxml.jackson.databind.node.ArrayNode) n.get("data")).addObject()
+                .put("type", "user.tool_approval").put("thread_id", "main").put("tool_call_id", "call_4")
+                .putObject("approval").put("status", "allow");
+            EVENTS_ANSWERED = MAPPER.writeValueAsString(n);
         } catch (Exception e) {
             throw new ExceptionInInitializerError(e);
         }
@@ -244,6 +288,92 @@ class TrueForgeAgentTriggerTest {
         assertEquals("main", item.path("thread_id").asText());
         assertEquals("call_4", item.path("tool_call_id").asText());
         assertEquals("allow", item.path("approval").path("status").asText());
+    }
+
+    @Test
+    void pausedTurnApprovalIsReadFromEventsAndResumesTheRun() throws Exception {
+        tf.eventsOverride = EVENTS_WITH_APPROVAL;
+        // After the decision the same turn runs on to done: no new turn is created.
+        tf.whenGetTurn("turn-1", RUNNING, PAUSED_NO_ACTIONS, DONE);
+        AtomicReference<PendingApproval> seen = new AtomicReference<>();
+
+        Run run = trigger(a -> { seen.set(a); return ApprovalHandler.Decision.allow(); }).start(pod("crashy"));
+        assertEquals(Outcome.COMPLETED, await(run));
+
+        PendingApproval a = seen.get();
+        assertNotNull(a, "a paused turn with a tool.approval_required event must reach the human");
+        assertEquals("k8s-prod", a.connector());
+        assertEquals("kubectl_patch", a.toolName());
+        assertEquals("call_4", a.toolCallId());
+
+        assertEquals(1, tf.turnBodies.size(), "an approval resumes the paused turn; it must not start a new turn");
+        assertEquals(1, tf.eventPostBodies.size());
+        JsonNode item = tf.eventPostBodies.get(0).path("events").get(0);
+        assertEquals("user.tool_approval", item.path("type").asText());
+        assertEquals("call_4", item.path("tool_call_id").asText());
+        assertEquals("allow", item.path("approval").path("status").asText());
+    }
+
+    @Test
+    void approvalDeferredToTheUiIsFollowedWhenTheSamePausedTurnResumesInPlace() throws Exception {
+        tf.eventsOverride = EVENTS_WITH_APPROVAL;
+        tf.whenGetTurn("turn-1", PAUSED_NO_ACTIONS, DONE); // a human answers in the UI; the turn resumes in place
+
+        Run run = trigger(a -> ApprovalHandler.Decision.defer()).start(pod("crashy"));
+        assertEquals(Outcome.COMPLETED, await(run));
+        assertEquals(1, tf.turnBodies.size(), "a deferred decision must not be posted by Sentinel");
+        assertEquals(0, tf.eventPostBodies.size(), "a deferred decision must not be posted by Sentinel");
+    }
+
+    @Test
+    void answeredApprovalIsNotAskedAgain() throws Exception {
+        TrueForgeAgentTrigger.PAUSE_GRACE = Duration.ofMillis(50);
+        try {
+            tf.eventsOverride = EVENTS_ANSWERED; // request + the human's answer, turn still paused
+            tf.whenGetTurn("turn-1", PAUSED_NO_ACTIONS);
+            AtomicInteger asked = new AtomicInteger();
+            TrueForgeAgentTrigger t = new TrueForgeAgentTrigger(tf.url(), "sentinel-agent", null,
+                a -> { asked.incrementAndGet(); return ApprovalHandler.Decision.allow(); },
+                Duration.ofMillis(20), Duration.ofSeconds(1));
+
+            Run run = t.start(pod("crashy"));
+            assertEquals(Outcome.ABANDONED, await(run));
+            assertEquals(0, asked.get(), "an approval that was already answered must not be asked for again");
+            assertEquals(0, tf.eventPostBodies.size());
+        } finally {
+            TrueForgeAgentTrigger.PAUSE_GRACE = Duration.ofMinutes(2);
+        }
+    }
+
+    @Test
+    void unknownTurnStateAppliesNothingAndLeavesTheRunForAHuman() throws Exception {
+        tf.eventsOverride = EVENTS_WITH_APPROVAL; // even with an approval request present
+        tf.whenGetTurn("turn-1", "{\"data\":{\"state\":{\"status\":\"suspended-for-review\"}}}");
+        AtomicInteger asked = new AtomicInteger();
+
+        Run run = trigger(a -> { asked.incrementAndGet(); return ApprovalHandler.Decision.allow(); }).start(pod("crashy"));
+        assertEquals(Outcome.ABANDONED, await(run));
+        assertEquals(0, asked.get(), "an unrecognised state must never ask for or send an approval");
+        assertEquals(1, tf.turnBodies.size(), "no resume turn may be posted for an unrecognised state");
+    }
+
+    @Test
+    void pausedWithoutAnApprovalRequestIsNeverApproved() throws Exception {
+        TrueForgeAgentTrigger.PAUSE_GRACE = Duration.ofMillis(50);
+        try {
+            tf.whenGetTurn("turn-1", PAUSED_NO_ACTIONS); // no tool.approval_required event in EVENTS_JSON
+            AtomicInteger asked = new AtomicInteger();
+            TrueForgeAgentTrigger t = new TrueForgeAgentTrigger(tf.url(), "sentinel-agent", null,
+                a -> { asked.incrementAndGet(); return ApprovalHandler.Decision.allow(); },
+                Duration.ofMillis(20), Duration.ofSeconds(1));
+
+            Run run = t.start(pod("crashy"));
+            assertEquals(Outcome.ABANDONED, await(run), "held for a human after the grace period, not approved");
+            assertEquals(0, asked.get());
+            assertEquals(1, tf.turnBodies.size(), "no decision may be posted for a pause with no request");
+        } finally {
+            TrueForgeAgentTrigger.PAUSE_GRACE = Duration.ofMinutes(2);
+        }
     }
 
     @Test

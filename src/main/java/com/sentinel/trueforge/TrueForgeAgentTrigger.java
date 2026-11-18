@@ -228,15 +228,24 @@ public class TrueForgeAgentTrigger {
     // Following a run
     // ------------------------------------------------------------------------------------------
 
+    /** How long a turn may sit in state "paused" with no approval request before a human is asked. */
+    static volatile Duration PAUSE_GRACE = Duration.ofMinutes(2);
+
     private Outcome follow(String podId, String workload, String sessionId, String firstTurnId) throws InterruptedException {
         Instant deadline = Instant.now().plus(maxRun);
         String turnId = firstTurnId;
+        Instant pausedSince = null;
 
         while (Instant.now().isBefore(deadline)) {
             JsonNode state = call("GET", "/sessions/" + sessionId + "/turns/" + turnId, null).path("data").path("state");
-            String status = state.path("status").asText("running");
+            String status = state.path("status").asText(null);
+            if (status == null) {
+                // A state with no status is not one we understand: apply nothing, leave it to a human.
+                return unrecognisedState(podId, sessionId, "(no status)");
+            }
 
             switch (status) {
+                case "running" -> { /* keep polling */ }
                 case "error" -> {
                     System.err.println("[Sentinel] TrueForge run for " + podId + " failed: " + state.path("message").asText("(no message)"));
                     return Outcome.FAILED;
@@ -252,12 +261,39 @@ public class TrueForgeAgentTrigger {
                         System.out.println("[Sentinel] Agent finished for " + podId + ": " + truncate(output, MAX_PRINTED_CHARS));
                         return Outcome.COMPLETED;
                     }
-                    String next = resolvePause(podId, workload, sessionId, turnId, actions);
+                    String next = resolvePause(podId, workload, sessionId, turnId, actions, false);
                     if (next == null) return Outcome.ABANDONED;
                     turnId = next;
                     continue; // follow the resumed turn straight away
                 }
-                default -> { /* running - keep polling */ }
+                case "paused" -> {
+                    // Newer TrueForge: an approval pause is state "paused" with NO required_actions; the
+                    // pending request is a tool.approval_required EVENT on this turn.
+                    ArrayNode actions = pendingApprovalActions(sessionId, turnId);
+                    if (!actions.isEmpty()) {
+                        pausedSince = null;
+                        String next = resolvePause(podId, workload, sessionId, turnId, actions, true);
+                        if (next == null) return Outcome.ABANDONED;
+                        turnId = next;
+                        continue;
+                    }
+                    // Paused without an approval request: we do not know what it is waiting for, so
+                    // we do not act. Give it a grace period (a turn can pause briefly), then hand it
+                    // to a human in the UI rather than polling forever.
+                    if (pausedSince == null) pausedSince = Instant.now();
+                    if (Duration.between(pausedSince, Instant.now()).compareTo(PAUSE_GRACE) > 0) {
+                        System.out.println("[Sentinel] Run for " + podId + " is paused with no approval request; "
+                            + "not acting. A human must resume it in TrueForge: " + sessionUrl(sessionId));
+                        String next = awaitResumedTurn(podId, sessionId, turnId);
+                        if (next == null) return Outcome.ABANDONED;
+                        turnId = next;
+                        pausedSince = null;
+                        continue;
+                    }
+                }
+                default -> {
+                    return unrecognisedState(podId, sessionId, status);
+                }
             }
             Thread.sleep(pollInterval.toMillis());
         }
@@ -266,12 +302,57 @@ public class TrueForgeAgentTrigger {
     }
 
     /**
+     * The approval requests on a paused turn, shaped like the {@code required_actions} entries the
+     * watcher already understands. Empty if the turn has no pending approval request.
+     */
+    private ArrayNode pendingApprovalActions(String sessionId, String turnId) {
+        List<JsonNode> events = listAll("/sessions/" + sessionId + "/turns/" + turnId + "/events", 100);
+        // A request stays in the event list after it is answered; a user.tool_approval with the same
+        // tool_call_id is the answer. Only unanswered requests are pending.
+        java.util.Set<String> answered = new java.util.HashSet<>();
+        for (JsonNode e : events) {
+            if ("user.tool_approval".equals(e.path("type").asText())) answered.add(e.path("tool_call_id").asText());
+        }
+        ArrayNode actions = mapper.createArrayNode();
+        for (JsonNode e : events) {
+            if (!"tool.approval_required".equals(e.path("type").asText())) continue;
+            boolean isAnswered = false;
+            for (JsonNode tc : e.path("tool_calls")) {
+                if (answered.contains(tc.path("id").asText())) isAnswered = true;
+            }
+            if (isAnswered) continue;
+            ObjectNode action = actions.addObject();
+            action.put("type", "tool.approval_required");
+            action.put("thread_id", e.path("thread_id").asText("main"));
+            action.set("tool_calls", e.path("tool_calls"));
+        }
+        return actions;
+    }
+
+    /** Post decisions to a paused turn's events endpoint (the turn resumes in place). */
+    private void postEvents(String sessionId, String turnId, ArrayNode events) {
+        ObjectNode body = mapper.createObjectNode();
+        body.set("events", events);
+        call("POST", "/sessions/" + sessionId + "/turns/" + turnId + "/events", body);
+    }
+
+    /**
+     * A turn state we do not recognise. Nothing is approved, nothing is applied and no turn is posted:
+     * the run is left for a human to review in TrueForge.
+     */
+    private Outcome unrecognisedState(String podId, String sessionId, String status) {
+        System.err.println("[Sentinel] Unrecognised TrueForge turn state '" + status + "' for " + podId
+            + " - applying nothing; a human must review it: " + sessionUrl(sessionId));
+        return Outcome.ABANDONED;
+    }
+
+    /**
      * The turn ended paused. Collect a human decision for every pending approval and resume the
      * agent with one new turn; if the human is deciding elsewhere (the UI), just wait for the
      * resumed turn to appear. Returns the id of the turn to follow next, or null to stop.
      */
-    private String resolvePause(String podId, String workload, String sessionId, String pausedTurnId, JsonNode actions)
-        throws InterruptedException {
+    private String resolvePause(String podId, String workload, String sessionId, String pausedTurnId, JsonNode actions,
+                                boolean paused) throws InterruptedException {
 
         List<ObjectNode> approvals = new ArrayList<>();
         boolean deferToUi = false;
@@ -300,7 +381,16 @@ public class TrueForgeAgentTrigger {
             try {
                 ArrayNode input = mapper.createArrayNode();
                 approvals.forEach(input::add);
-                String resumed = postTurn(sessionId, input);
+                // A paused turn takes its decision on its own events endpoint and resumes IN PLACE:
+                // the same turn id is then followed. The legacy done+required_actions shape resumes
+                // through a new turn chained to the paused one.
+                String resumed;
+                if (paused) {
+                    postEvents(sessionId, pausedTurnId, input);
+                    resumed = pausedTurnId;
+                } else {
+                    resumed = postTurn(sessionId, input);
+                }
                 boolean allowed = approvals.stream().anyMatch(a -> "allow".equals(a.path("approval").path("status").asText()));
                 System.out.println("[Sentinel] " + (allowed ? "Approval sent" : "Denial sent") + " to TrueForge for " + podId);
                 if (approvals.stream().anyMatch(a -> "deny".equals(a.path("approval").path("status").asText()))) {
@@ -320,6 +410,17 @@ public class TrueForgeAgentTrigger {
         System.out.println("[Sentinel] Waiting for a human to resume the run for " + podId + " in TrueForge: " + sessionUrl(sessionId));
         Instant deadline = Instant.now().plus(maxRun);
         while (Instant.now().isBefore(deadline)) {
+            // A human's decision either chains a new turn (legacy) or resumes the paused turn IN PLACE
+            // (events endpoint). Either way, the run has moved on: follow whichever it is.
+            JsonNode st = call("GET", "/sessions/" + sessionId + "/turns/" + pausedTurnId, null)
+                .path("data").path("state");
+            String status = st.path("status").asText(null);
+            // "done" with pending required_actions is still waiting (the legacy pause shape), not resumed.
+            boolean stillWaiting = "paused".equals(status)
+                || ("done".equals(status) && st.path("required_actions").isArray() && !st.path("required_actions").isEmpty());
+            if (status != null && !stillWaiting) {
+                return pausedTurnId;
+            }
             for (JsonNode t : listAll("/sessions/" + sessionId + "/turns", 25)) {
                 if (pausedTurnId.equals(t.path("previous_turn_id").asText(null))) {
                     return t.path("id").asText();

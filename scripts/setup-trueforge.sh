@@ -42,7 +42,7 @@ py() { python3 -c "$@"; }
 
 echo "==> Checking TrueForge at $TRUEFORGE_URL"
 if ! curl -sf "$API/capabilities" >/dev/null 2>&1; then
-  echo "ERROR: TrueForge is not reachable at $TRUEFORGE_URL. Start it with:  npx @truefoundry/trueforge@latest" >&2
+  echo "ERROR: TrueForge is not reachable at $TRUEFORGE_URL. Start it with:  npx @truefoundry/trueforge@0.185.1" >&2
   exit 1
 fi
 
@@ -67,7 +67,9 @@ for name in k8s-sandbox k8s-prod; do
 done
 
 # --- 2. model provider (TrueFoundry AI gateway) -----------------------------------------------
-if [ -n "${TRUEFOUNDRY_GATEWAY_URL:-}" ] && [ -n "${TRUEFOUNDRY_API_KEY:-}" ] && [ -n "${SENTINEL_GATEWAY_MODEL_ID:-}" ]; then
+# Rehearsal (SENTINEL_REHEARSE=1) registers NO paid provider at all: no gateway, no OpenAI, no Daytona.
+PAID_OK=1; [ "${SENTINEL_REHEARSE:-}" = "1" ] && PAID_OK=0
+if [ "$PAID_OK" = 1 ] && [ -n "${TRUEFOUNDRY_GATEWAY_URL:-}" ] && [ -n "${TRUEFOUNDRY_API_KEY:-}" ] && [ -n "${SENTINEL_GATEWAY_MODEL_ID:-}" ]; then
   echo "==> Configuring TrueFoundry AI gateway model provider"
   export TRUEFOUNDRY_GATEWAY_URL TRUEFOUNDRY_API_KEY SENTINEL_GATEWAY_MODEL_ID
   payload="$(py '
@@ -82,7 +84,7 @@ print(json.dumps({"manifest": {
                 "properties": {"context_length": 200000, "max_output_tokens": 8192}}]}}))
 ')"
   api PUT /settings/model-providers "$payload" >/dev/null
-elif [ -n "${OPENAI_API_KEY:-}" ] || [ -s "$SENTINEL_ROOT/.sentinel/openai-api-key" ]; then
+elif [ "$PAID_OK" = 1 ] && { [ -n "${OPENAI_API_KEY:-}" ] || [ -s "$SENTINEL_ROOT/.sentinel/openai-api-key" ]; }; then
   echo "==> Configuring OpenAI model provider"
   OPENAI_API_KEY="${OPENAI_API_KEY:-$(cat "$SENTINEL_ROOT/.sentinel/openai-api-key")}"
   export OPENAI_API_KEY
@@ -107,7 +109,7 @@ else
 fi
 
 # --- 3. sandbox provider (Daytona) ------------------------------------------------------------
-if [ -n "${DAYTONA_API_KEY:-}" ]; then
+if [ "$PAID_OK" = 1 ] && [ -n "${DAYTONA_API_KEY:-}" ]; then
   echo "==> Configuring Daytona sandbox provider"
   export DAYTONA_API_KEY
   payload="$(py '
@@ -154,12 +156,17 @@ fi
 echo "    using model: $MODEL"
 
 export SENTINEL_MODEL="$MODEL"
-AGENT_JSON="$(py '
+# SENTINEL_TRIM_TOOL_OUTPUT=1 selects the instructions variant that asks for smaller tool results.
+# Default off: the untrimmed instructions are used unless the flag is set exactly to 1.
+INSTR_FILE="sentinel-instructions.md"
+[ "${SENTINEL_TRIM_TOOL_OUTPUT:-0}" = "1" ] && INSTR_FILE="sentinel-instructions.trimmed.md"
+echo "    instructions: $INSTR_FILE"
+AGENT_JSON="$(INSTR_FILE="$INSTR_FILE" py '
 import json, os, sys
 root = sys.argv[1]
 a = json.load(open(root + "/trueforge/sentinel-agent.json"))
 a["manifest"]["model"]["name"] = os.environ["SENTINEL_MODEL"]
-a["manifest"]["instructions"] = open(root + "/trueforge/sentinel-instructions.md").read().strip()
+a["manifest"]["instructions"] = open(root + "/trueforge/" + os.environ["INSTR_FILE"]).read().strip()
 print(json.dumps(a))
 ' "$SENTINEL_ROOT")"
 

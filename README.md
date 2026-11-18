@@ -110,8 +110,11 @@ Docker, [kind](https://kind.sigs.k8s.io), `kubectl`, Java 21 + Maven, Node 22.14
 ### Run the demo
 
 ```bash
-# 1. TrueForge, in its own terminal (UI: http://localhost:8790)
-npx @truefoundry/trueforge@latest
+# 1. TrueForge, in its own terminal (UI: http://localhost:8790).
+#    Pinned to 0.185.1: this is the version the watcher's `paused`-approval handling was verified
+#    against. The allowlist lets TrueForge reach the two MCP servers on loopback (its SSRF guard
+#    blocks 127.0.0.1 otherwise). It is local-only; do not widen it.
+OUTBOUND_URL_ALLOWED_HOSTS='["127.0.0.1","localhost"]' npx @truefoundry/trueforge@0.185.1
 
 # 2a. Dry run with a scripted model - no keys, no cost. Proves the whole pipeline: evidence-based
 #     investigation, a real broken->fixed sandbox reproduction, a blast-radius report, the approval
