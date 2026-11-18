@@ -1,0 +1,48 @@
+{
+  "banner": "MOCK MODEL: plumbing check, not accuracy.",
+  "stamp": "20261118T152122Z",
+  "faults": [
+    {
+      "id": "missing-configmap",
+      "deployment": "fault-missing-cm",
+      "mock_scripted": false,
+      "expected": {
+        "detected": true,
+        "outcome": "approve",
+        "sandbox": "reproduces CreateContainerConfigError; creating the ConfigMap in the sandbox runs"
+      },
+      "detected": true,
+      "pod": "fault-missing-cm-fbc6c7fcb-sf4pd",
+      "session_id": "01m7qkrxyjkqa6rmwstae1ezfd",
+      "run_outcome": "finished",
+      "approval_requested": false,
+      "tool_proposed": null,
+      "approved": false,
+      "pod_ready_after": null,
+      "notes": [],
+      "detection_match": true,
+      "status": "NOT EXERCISED (mock has no script for this fault)"
+    },
+    {
+      "id": "unschedulable-memory",
+      "deployment": "fault-unschedulable",
+      "mock_scripted": false,
+      "expected": {
+        "detected": true,
+        "outcome": "approve",
+        "sandbox": "reproduces Pending/Unschedulable; a request that fits a node schedules and runs"
+      },
+      "detected": true,
+      "pod": "fault-unschedulable-5cc5bc556d-s8jxp",
+      "session_id": "01m7qkz1a2d8nsf60zcw48haqe",
+      "run_outcome": "finished",
+      "approval_requested": false,
+      "tool_proposed": null,
+      "approved": false,
+      "pod_ready_after": null,
+      "notes": [],
+      "detection_match": true,
+      "status": "NOT EXERCISED (mock has no script for this fault)"
+    }
+  ]
+}

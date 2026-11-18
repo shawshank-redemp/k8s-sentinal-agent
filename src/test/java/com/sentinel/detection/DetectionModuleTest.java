@@ -45,14 +45,17 @@ class DetectionModuleTest {
         originalDedupWindow = DetectionModule.DEDUP_WINDOW_SECONDS;
         originalWaitingStale = DetectionModule.WAITING_STALE_TIMEOUT_SECONDS;
         originalPendingMinAge = DetectionModule.PENDING_MIN_AGE_SECONDS;
+        originalStuckPending = DetectionModule.STUCK_PENDING_SECONDS;
 
         DetectionModule.TRANSIENT_WAIT_SECONDS = 0.5;
         DetectionModule.DEDUP_WINDOW_SECONDS = 2;
         DetectionModule.WAITING_STALE_TIMEOUT_SECONDS = 1;
         DetectionModule.PENDING_MIN_AGE_SECONDS = 1;
+        DetectionModule.STUCK_PENDING_SECONDS = 1;
 
         DetectionModule.processedPods.clear();
         DetectionModule.waitingPods.clear();
+        DetectionModule.stuckPendingWatch.clear();
     }
 
     @AfterEach
@@ -61,7 +64,11 @@ class DetectionModuleTest {
         DetectionModule.DEDUP_WINDOW_SECONDS = originalDedupWindow;
         DetectionModule.WAITING_STALE_TIMEOUT_SECONDS = originalWaitingStale;
         DetectionModule.PENDING_MIN_AGE_SECONDS = originalPendingMinAge;
+        DetectionModule.STUCK_PENDING_SECONDS = originalStuckPending;
+        DetectionModule.stuckPendingWatch.clear();
     }
+
+    private double originalStuckPending;
 
     private static void sleep(double seconds) {
         try {
@@ -306,6 +313,72 @@ class DetectionModuleTest {
             "40s-old Pending pod diagnosed (past the age filter)");
 
         assertEquals("MEDIUM", DetectionModule.extractPodInfo(pod).severity(), "long-Pending pod classified as MEDIUM");
+    }
+
+    // ------------------------------------------------------------------
+    // Stuck Pending (ContainerCreating / Unschedulable): threshold, dedup, and the silent-pod case
+    // ------------------------------------------------------------------
+
+    @Test
+    void stuckPendingPastThresholdIsDetected() {
+        DetectionModule.STUCK_PENDING_SECONDS = 60;
+        String podId = "default/stuck-old";
+        Pod pod = makePod("stuck-old", "default", "Pending", null, 0, 300, false, List.of()); // 5 min old
+
+        assertFalse(DetectionModule.shouldDiagnoseNow(podId, "stuck-old", "default", pod),
+            "past the threshold, the stuck clock starts; not diagnosed on first sight");
+        sleep(DetectionModule.TRANSIENT_WAIT_SECONDS + 0.2);
+        assertTrue(DetectionModule.shouldDiagnoseNow(podId, "stuck-old", "default", pod),
+            "still stuck after the transient wait, past the threshold: detected");
+    }
+
+    @Test
+    void stuckPendingUnderThresholdIsNotDetectedButStaysWatched() {
+        DetectionModule.STUCK_PENDING_SECONDS = 60;
+        String podId = "default/stuck-young";
+        Pod pod = makePod("stuck-young", "default", "Pending", null, 0, 10, false, List.of()); // 10 s old
+
+        assertFalse(DetectionModule.shouldDiagnoseNow(podId, "stuck-young", "default", pod));
+        assertTrue(DetectionModule.stuckPendingWatch.containsKey(podId),
+            "a young stuck pod must stay on the sweeper's watch, because no event may come for it");
+        sleep(DetectionModule.TRANSIENT_WAIT_SECONDS + 0.2);
+        assertFalse(DetectionModule.shouldDiagnoseNow(podId, "stuck-young", "default", pod),
+            "still under the threshold: not detected, however long it waits");
+    }
+
+    @Test
+    void duplicateStuckPendingIsDeduplicated() {
+        String podId = "default/stuck-dup";
+        Pod pod = makePod("stuck-dup", "default", "Pending", null, 0, 300, false, List.of());
+
+        assertFalse(DetectionModule.shouldDiagnoseNow(podId, "stuck-dup", "default", pod));
+        sleep(DetectionModule.TRANSIENT_WAIT_SECONDS + 0.2);
+        assertTrue(DetectionModule.shouldDiagnoseNow(podId, "stuck-dup", "default", pod));
+        assertFalse(DetectionModule.shouldDiagnoseNow(podId, "stuck-dup", "default", pod),
+            "a second evaluation inside the dedup window must not start a second run");
+    }
+
+    @Test
+    void sweepDetectsASilentStuckPendingPodWithoutAnotherEvent() throws InterruptedException {
+        java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.CountDownLatch called = new java.util.concurrent.CountDownLatch(1);
+        DetectionModule.setDiagnosisModule(info -> {
+            calls.incrementAndGet();
+            called.countDown();
+            return new DiagnosisResult(info.podId(), info.podName(), info.namespace(),
+                "x", "LOW", "x", 1.0, List.of(), 0, "", List.of());
+        });
+        try {
+            Pod pod = makePod("silent-stuck", "default", "Pending", null, 0, 300, false, List.of());
+            DetectionModule.evaluate(pod); // the only event this pod will ever produce
+            DetectionModule.sweepWaitingPods();
+            sleep(DetectionModule.TRANSIENT_WAIT_SECONDS + 0.2);
+            DetectionModule.sweepWaitingPods();
+            assertTrue(called.await(3, java.util.concurrent.TimeUnit.SECONDS),
+                "a Pending pod that goes quiet must be diagnosed through the sweep alone");
+        } finally {
+            DetectionModule.setDiagnosisModule(null);
+        }
     }
 
     // ------------------------------------------------------------------

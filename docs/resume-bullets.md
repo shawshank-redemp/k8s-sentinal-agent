@@ -10,8 +10,10 @@ nothing below implies them.
   with the request as an event, not as the `done` state the watcher expected; reworked the watcher to read
   unanswered requests from events, decide through the events endpoint, and fail closed on any unknown
   state. **59 Java unit tests pass.** Verified end to end on a local cluster with a scripted model.
-- Built a fault-injection harness over **7 Kubernetes faults**. With the scripted model it detected **5 of 7**
-  as expected. The one fault the scripted model can repair ended with the pod Ready (checked with `kubectl`).
+- Built a fault-injection harness over **7 Kubernetes faults**. A detection miss found by the harness (quiet
+  `Pending` pods were never revisited) was traced to its cause and fixed. With the scripted model, detection
+  now matches the expected result for **7 of 7** faults. The one fault the scripted model can repair ended with
+  the pod Ready (checked with `kubectl`).
 - Measured that **tool results were 72% of tool-output bytes** (`kubectl_get` and `kubectl_describe`) and
   that the **messages component was 52.5%** of input tokens across real-model calls; a local simulation estimates
   about 12.9% fewer input tokens under a trimming rule (an estimate, not a measurement).
