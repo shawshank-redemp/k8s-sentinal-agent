@@ -1,0 +1,31 @@
+# Fault: failing readiness probe. The pod stays Running with 0 restarts but never becomes Ready.
+# This is NOT a failure state the detector recognises (phase Running, no failing container reason),
+# so an expected miss.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fault-readiness
+  namespace: default
+  labels:
+    app: fault-readiness
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fault-readiness
+  template:
+    metadata:
+      labels:
+        app: fault-readiness
+    spec:
+      containers:
+      - name: app
+        image: busybox:latest
+        command: ["/bin/sh", "-c", "sleep 3600"]
+        readinessProbe:
+          exec:
+            command: ["cat", "/tmp/ready"]
+          periodSeconds: 5
+        resources:
+          limits:
+            memory: "64Mi"

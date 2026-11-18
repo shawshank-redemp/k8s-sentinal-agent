@@ -255,6 +255,21 @@ FINAL_TEXT = {
     ),
 }
 
+FINAL_TEXT["retry"] = FINAL_TEXT["crash"]
+
+
+def retry_steps():
+    """First fix is wrong (the refuse script, through its failed sandbox check). The agent gets ONE
+    retry: it applies the correct fix in the sandbox, verifies it, and only then requests approval."""
+    return refuse_steps()[:11] + [
+        ("Sandbox verification failed: the pod still exits with the same REQUIRED_CONFIG error, so my "
+         "env var name was wrong. Retry (the one allowed retry): correcting the variable name to "
+         "REQUIRED_CONFIG and applying the corrected fix in sentinel-sandbox.",
+         "call_tool", lambda: call_tool("k8s-sandbox", "kubectl_patch",
+            {"resourceType": "deployment", "name": APP, "namespace": SANDBOX_NS,
+             "patchType": "strategic", "patchData": FIX_PATCH})),
+    ] + crash_steps()[8:]
+
 
 def sse(handler, obj):
     handler.wfile.write(b"data: " + json.dumps(obj).encode() + b"\n\n")
@@ -284,7 +299,12 @@ class Handler(BaseHTTPRequestHandler):
         # Steps already issued = assistant messages that made tool calls. This also survives the
         # approval pause: the paused call is in the history when the resumed turn calls us again.
         issued = sum(1 for m in messages if m.get("role") == "assistant" and m.get("tool_calls"))
-        steps = crash_steps() if self.scenario == "crash" else refuse_steps()
+        # The mock has runbooks for sentinel-demo-app only. Any other alert gets a plain final message
+        # and NO tool calls - it must never run the crash script against some other workload.
+        alert = " ".join(m["content"] for m in messages if isinstance(m.get("content"), str))
+        supported = APP in alert
+        script = {"crash": crash_steps, "refuse": refuse_steps, "retry": retry_steps}[self.scenario]
+        steps = script() if supported else []
 
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
@@ -300,7 +320,9 @@ class Handler(BaseHTTPRequestHandler):
             sse(self, chunk({"tool_calls": [{"index": 0, "function": {"arguments": json.dumps(args_fn())}}]}))
             sse(self, chunk({}, "tool_calls"))
         else:
-            sse(self, chunk({"role": "assistant", "content": FINAL_TEXT[self.scenario]}))
+            final = FINAL_TEXT[self.scenario] if supported else (
+                "Mock model: no scripted runbook exists for this alert, so I am taking no action.")
+            sse(self, chunk({"role": "assistant", "content": final}))
             sse(self, chunk({}, "stop"))
         # FAKE usage, required only so TrueForge accepts the stream. It is NOT a measurement: every
         # mock call reports exactly 10/10, and eval/metrics_report.py excludes these sessions.
@@ -314,7 +336,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9911)
     ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--scenario", choices=["crash", "refuse"], default="crash")
+    ap.add_argument("--scenario", choices=["crash", "refuse", "retry"], default="crash")
     a = ap.parse_args()
     Handler.scenario = a.scenario
     print(f"mock LLM listening on http://{a.host}:{a.port}/v1 (scenario: {a.scenario})", file=sys.stderr)
