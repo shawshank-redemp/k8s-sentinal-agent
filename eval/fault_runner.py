@@ -41,6 +41,7 @@ KUBE_CONTEXT = os.environ.get("KUBE_CONTEXT", "kind-sentinel-demo")
 TF = os.environ.get("TRUEFORGE_URL", "http://localhost:8790")
 MOCK_PORT = 9911
 BANNER = "MOCK MODEL: plumbing check, not accuracy."
+MOCK_SCENARIO = "crash"  # set from --mock-scenario in main()
 PAID_ENV = ("OPENAI_API_KEY", "TRUEFOUNDRY_API_KEY", "TRUEFOUNDRY_GATEWAY_URL", "DAYTONA_API_KEY")
 
 
@@ -94,7 +95,8 @@ def tf_post(path, body):
 # --------------------------------------------------------------------------------------------
 
 class Stack:
-    def __init__(self):
+    def __init__(self, scenario="crash"):
+        self.scenario = scenario  # mock runbook: crash | refuse | retry
         self.procs = []  # processes this runner started, stopped at the end
 
     def start_bg(self, argv, logname, cwd=REPO):
@@ -114,7 +116,7 @@ class Stack:
         if not up(f"http://127.0.0.1:{MOCK_PORT}/v1/models"):
             print(f"==> starting the scripted mock model on :{MOCK_PORT}")
             self.start_bg([sys.executable, os.path.join(REPO, "demo", "mock-llm", "mock_llm.py"),
-                           "--scenario", "crash", "--port", str(MOCK_PORT)], "eval-mock.log")
+                           "--scenario", self.scenario, "--port", str(MOCK_PORT)], "eval-mock.log")
             for _ in range(20):
                 if up(f"http://127.0.0.1:{MOCK_PORT}/v1/models"):
                     break
@@ -284,7 +286,10 @@ def run_fault(fault, watcher_log, detect_timeout, run_timeout, settle):
 def judge(rec):
     exp = rec["expected"]
     det_ok = rec["detected"] == exp["detected"]
-    if not rec["mock_scripted"] and exp["outcome"] == "approve" and not rec["approval_requested"]:
+    if not det_ok:
+        # A detection miss (or a false alarm) is a result in its own right, whatever the mock does next.
+        status = "MISMATCH (detection)"
+    elif not rec["mock_scripted"] and exp["outcome"] == "approve" and not rec["approval_requested"]:
         status = "NOT EXERCISED (mock has no script for this fault)"
     else:
         want_approval = exp["outcome"] == "approve"
@@ -300,7 +305,7 @@ def write_results(recs, stamp):
     base = os.path.join(RESULTS_DIR, stamp)
     with open(base + ".json", "w") as f:
         json.dump({"banner": BANNER, "stamp": stamp, "faults": recs}, f, indent=2)
-    lines = [f"# Fault-injection plumbing check - {stamp}", "", f"**{BANNER}**", "",
+    lines = [f"# Fault-injection plumbing check - {stamp}", "", f"**{BANNER}** Mock runbook: {MOCK_SCENARIO}.", "",
              "Expected values are what a correct agent should do with a real model; they are not "
              "measured. Only detection, proposal and cluster state are auto-scored. Sandbox fidelity "
              "is not scored.", "",
@@ -326,6 +331,8 @@ def main():
     ap.add_argument("--detect-timeout", type=int, default=150)
     ap.add_argument("--run-timeout", type=int, default=480)
     ap.add_argument("--settle", type=int, default=45)
+    ap.add_argument("--mock-scenario", default="crash", choices=["crash", "refuse", "retry"],
+                    help="which scripted mock runbook to use (retry = wrong fix, one retry, right fix)")
     a = ap.parse_args()
 
     if not KUBE_CONTEXT.startswith("kind-"):
@@ -339,7 +346,9 @@ def main():
         wanted = set(a.only.split(","))
         faults = [x for x in faults if x["id"] in wanted]
 
-    stack = Stack()
+    global MOCK_SCENARIO
+    MOCK_SCENARIO = a.mock_scenario
+    stack = Stack(a.mock_scenario)
     try:
         stack.ensure()
         watcher_log = stack.start_watcher()
